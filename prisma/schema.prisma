@@ -1,0 +1,386 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  SALES
+  WAREHOUSE
+  DRIVER
+  B2B_CUSTOMER
+}
+
+enum OrderStatus {
+  NEW
+  CONFIRMED
+  PREPARING
+  READY_FOR_DELIVERY
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  ON_ACCOUNT
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  PARTIALLY_PAID
+  OVERDUE
+}
+
+enum DeliveryStatus {
+  PLANNED
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+}
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String
+  firstName    String
+  lastName     String
+  role         Role      @default(B2B_CUSTOMER)
+  phone        String?
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  customer     Customer?
+  driver       Driver?
+  auditLogs    AuditLog[]
+
+  @@map("users")
+}
+
+model Customer {
+  id              String        @id @default(uuid())
+  userId          String?       @unique
+  user            User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  companyName     String
+  ico             String?       // Registration number (IČO)
+  dic             String?       // VAT number (DIČ)
+  contactPerson   String?
+  phone           String
+  email           String
+  creditLimit     Decimal       @default(0) @db.Decimal(12, 2)
+  currentBalance  Decimal       @default(0) @db.Decimal(12, 2)
+  isActive        Boolean       @default(true)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  addresses       CustomerAddress[]
+  prices          CustomerPrice[]
+  orders          SalesOrder[]
+  invoices        Invoice[]
+
+  @@map("customers")
+}
+
+model CustomerAddress {
+  id         String   @id @default(uuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  street     String
+  city       String
+  postalCode String
+  country    String   @default("Czech Republic")
+  isDefault  Boolean  @default(false)
+  notes      String?  // Delivery instructions
+
+  orders     SalesOrder[]
+
+  @@map("customer_addresses")
+}
+
+model Category {
+  id          String    @id @default(uuid())
+  name        String
+  slug        String    @unique
+  description String?
+  parentId    String?
+  parent      Category? @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children    Category[] @relation("CategoryHierarchy")
+
+  products    Product[]
+
+  @@map("categories")
+}
+
+model Supplier {
+  id            String    @id @default(uuid())
+  name          String
+  contactPerson String?
+  phone         String?
+  email         String?
+  address       String?
+  currency      String    @default("CZK") // CZK or EUR
+  paymentTerms  String?   // e.g. "14 days"
+
+  products      Product[]
+  purchaseOrders PurchaseOrder[]
+
+  @@map("suppliers")
+}
+
+model Warehouse {
+  id          String   @id @default(uuid())
+  name        String
+  code        String   @unique
+  address     String?
+  isDefault   Boolean  @default(false)
+
+  stocks      Stock[]
+  movements   InventoryMovement[]
+
+  @@map("warehouses")
+}
+
+model Product {
+  id               String          @id @default(uuid())
+  sku              String          @unique
+  name             String
+  slug             String          @unique
+  description      String?
+  specifications   String?
+  brand            String?
+  ean              String?
+  categoryId       String
+  category         Category        @relation(fields: [categoryId], references: [id])
+  supplierId       String?
+  supplier         Supplier?       @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+
+  // Financials using precise decimals
+  purchasePrice    Decimal         @db.Decimal(12, 2)
+  standardPrice    Decimal         @db.Decimal(12, 2)
+  currency         String          @default("CZK")
+
+  // Packaging & Logistics
+  unitOfMeasure    String          @default("pcs") // pcs, kg, box, etc.
+  packSize         Int             @default(1)
+  minOrderQty      Int             @default(1)
+  weightKg         Decimal?        @db.Decimal(8, 3)
+
+  isActive         Boolean         @default(true)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  customerPrices   CustomerPrice[]
+  promotionalPrices PromotionalPrice[]
+  stocks           Stock[]
+  orderItems       OrderItem[]
+  purchaseOrderItems PurchaseOrderItem[]
+
+  @@map("products")
+}
+
+model CustomerPrice {
+  id         String   @id @default(uuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  price      Decimal  @db.Decimal(12, 2)
+  validFrom  DateTime?
+  validTo    DateTime?
+
+  @@unique([customerId, productId])
+  @@map("customer_prices")
+}
+
+model PromotionalPrice {
+  id        String   @id @default(uuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  price     Decimal  @db.Decimal(12, 2)
+  validFrom DateTime
+  validTo   DateTime
+
+  @@map("promotional_prices")
+}
+
+model Stock {
+  id          String    @id @default(uuid())
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  warehouseId String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  quantity    Int       @default(0)
+  reservedQty Int       @default(0)
+  minStock    Int       @default(0)
+
+  @@unique([productId, warehouseId])
+  @@map("stocks")
+}
+
+model InventoryMovement {
+  id          String    @id @default(uuid())
+  productId   String
+  warehouseId String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  quantity    Int       // Positive for in, negative for out
+  type        String    // PURCHASE_RECEIVE, SALE_DISPATCH, ADJUSTMENT
+  reference   String?   // Order ID or Purchase Order ID
+  notes       String?
+  createdAt   DateTime  @default(now())
+
+  @@map("inventory_movements")
+}
+
+model SalesOrder {
+  id            String        @id @default(uuid())
+  orderNumber   String        @unique
+  customerId    String
+  customer      Customer      @relation(fields: [customerId], references: [id])
+  addressId     String?
+  address       CustomerAddress? @relation(fields: [addressId], references: [id])
+  status        OrderStatus   @default(NEW)
+  paymentMethod PaymentMethod @default(BANK_TRANSFER)
+  paymentStatus PaymentStatus @default(PENDING)
+  subtotal      Decimal       @db.Decimal(12, 2)
+  taxTotal      Decimal       @db.Decimal(12, 2)
+  totalAmount   Decimal       @db.Decimal(12, 2)
+  currency      String        @default("CZK")
+  notes         String?
+  deliveryDate  DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  items         OrderItem[]
+  deliveries    Delivery[]
+  invoices      Invoice[]
+
+  @@map("sales_orders")
+}
+
+model OrderItem {
+  id           String     @id @default(uuid())
+  orderId      String
+  order        SalesOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId    String
+  product      Product    @relation(fields: [productId], references: [id])
+  quantity     Int
+  unitPrice    Decimal    @db.Decimal(12, 2) // Snapshotted price at time of order
+  totalPrice   Decimal    @db.Decimal(12, 2)
+
+  @@map("order_items")
+}
+
+model Driver {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vehicle   String?
+  phone     String?
+  isActive  Boolean  @default(true)
+
+  deliveries Delivery[]
+
+  @@map("drivers")
+}
+
+model Delivery {
+  id            String         @id @default(uuid())
+  deliveryNumber String        @unique
+  orderId       String
+  order         SalesOrder     @relation(fields: [orderId], references: [id])
+  driverId      String?
+  driver        Driver?        @relation(fields: [driverId], references: [id], onDelete: SetNull)
+  status        DeliveryStatus @default(PLANNED)
+  stopOrder     Int?
+  scheduledDate DateTime?
+  completedAt   DateTime?
+  notes         String?
+  signatureUrl  String?
+
+  @@map("deliveries")
+}
+
+model Invoice {
+  id            String        @id @default(uuid())
+  invoiceNumber String        @unique
+  orderId       String?
+  order         SalesOrder?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  customerId    String
+  customer      Customer      @relation(fields: [customerId], references: [id])
+  type          String        @default("STANDARD") // STANDARD, ADVANCE, CREDIT_NOTE
+  status        PaymentStatus @default(PENDING)
+  subtotal      Decimal       @db.Decimal(12, 2)
+  taxTotal      Decimal       @db.Decimal(12, 2)
+  totalAmount   Decimal       @db.Decimal(12, 2)
+  dueDate       DateTime
+  paidAt        DateTime?
+  createdAt     DateTime      @default(now())
+
+  payments      Payment[]
+
+  @@map("invoices")
+}
+
+model Payment {
+  id            String        @id @default(uuid())
+  invoiceId     String
+  invoice       Invoice       @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  amount        Decimal       @db.Decimal(12, 2)
+  method        PaymentMethod @default(BANK_TRANSFER)
+  reference     String?
+  paidAt        DateTime      @default(now())
+
+  @@map("payments")
+}
+
+model PurchaseOrder {
+  id             String              @id @default(uuid())
+  poNumber       String              @unique
+  supplierId     String
+  supplier       Supplier            @relation(fields: [supplierId], references: [id])
+  status         String              @default("PENDING")
+  totalAmount    Decimal             @db.Decimal(12, 2)
+  currency       String              @default("CZK")
+  createdAt      DateTime            @default(now())
+
+  items          PurchaseOrderItem[]
+
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id              String        @id @default(uuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  productId       String
+  product         Product       @relation(fields: [productId], references: [id])
+  quantity        Int
+  unitCost        Decimal       @db.Decimal(12, 2)
+  totalCost       Decimal       @db.Decimal(12, 2)
+
+  @@map("purchase_order_items")
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action    String
+  entity    String
+  entityId  String?
+  details   String?
+  createdAt DateTime @default(now())
+
+  @@map("audit_logs")
+}
